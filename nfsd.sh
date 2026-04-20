@@ -22,7 +22,7 @@ stop()
 
 if [ -z "${EXPORTS_MOUNTED}" ]; then
   echo "Building /etc/exports file..."
-  /usr/bin/exports.sh
+  /usr/bin/exports.sh || exit 1
 # EXPORTS_MOUNTED is set, ensure a file is mounted
 elif [ -f /etc/exports ]; then
   echo "Skipping creation of /etc/exports, user has set EXPORTS_MOUNTED and mounted a file at /etc/exports"
@@ -37,83 +37,38 @@ fi
 set -uo pipefail
 IFS=$'\n\t'
 
-# This loop runs till until we've started up successfully
-while true; do
+echo "Displaying /etc/exports contents:"
+cat /etc/exports
+echo ""
 
-  # Check if NFS is running by recording it's PID (if it's not running $pid will be null):
-  pid=`pidof rpc.mountd`
+# Normally only required if v3 will be used
+# But currently enabled to overcome an NFS bug around opening an IPv6 socket
+echo "Starting rpcbind..."
+/sbin/rpcbind -w
+echo "Displaying rpcbind status..."
+/sbin/rpcinfo
 
-  # If $pid is null, do this to start or restart NFS:
-  while [ -z "$pid" ]; do
-    echo "Displaying /etc/exports contents:"
-    cat /etc/exports
-    echo ""
+# Only required if v3 will be used
+# /usr/sbin/rpc.idmapd
+# /usr/sbin/rpc.gssd -v
+# /usr/sbin/rpc.statd
 
-    # Normally only required if v3 will be used
-    # But currently enabled to overcome an NFS bug around opening an IPv6 socket
-    echo "Starting rpcbind..."
-    /sbin/rpcbind -w
-    echo "Displaying rpcbind status..."
-    /sbin/rpcinfo
+echo "Starting NFS in the background..."
+/usr/sbin/rpc.nfsd --debug 8 --no-udp --no-nfs-version 3
+echo "Exporting File System..."
+if /usr/sbin/exportfs -rv; then
+  /usr/sbin/exportfs
+else
+  echo "Export validation failed, exiting..."
+  exit 1
+fi
 
-    # Only required if v3 will be used
-    # /usr/sbin/rpc.idmapd
-    # /usr/sbin/rpc.gssd -v
-    # /usr/sbin/rpc.statd
+# Set thread count after startup
+if [ -n "${NFS_THREADS:-}" ]; then
+  echo "${NFS_THREADS}" > /proc/fs/nfsd/threads 2>/dev/null
+fi
+echo "NFS running with $(cat /proc/fs/nfsd/threads) worker threads"
 
-    echo "Starting NFS in the background..."
-    /usr/sbin/rpc.nfsd --debug 8 --no-udp --no-nfs-version 3
-    echo "Exporting File System..."
-    if /usr/sbin/exportfs -rv; then
-      /usr/sbin/exportfs
-    else
-      echo "Export validation failed, exiting..."
-      exit 1
-    fi
-    echo "Starting Mountd in the background..."
-    /usr/sbin/rpc.mountd --debug all --no-udp --no-nfs-version 3
+echo "Starting Mountd in the background..."
+/usr/sbin/rpc.mountd -F --debug all --no-udp --no-nfs-version 3
 # --exports-file /etc/exports
-
-    # Check if NFS is now running by recording it's PID (if it's not running $pid will be null):
-    pid=`pidof rpc.mountd`
-
-    # If $pid is null, startup failed; log the fact and sleep for 2s
-    # We'll then automatically loop through and try again
-    if [ -z "$pid" ]; then
-      echo "Startup of NFS failed, sleeping for 2s, then retrying..."
-      sleep 2
-    fi
-
-  done
-
-  # Set thread count after startup
-  if [ -n "${NFS_THREADS:-}" ]; then
-    echo "${NFS_THREADS}" > /proc/fs/nfsd/threads 2>/dev/null
-  fi
-  echo "NFS running with $(cat /proc/fs/nfsd/threads) worker threads"
-
-  # Break this outer loop once we've started up successfully
-  # Otherwise, we'll silently restart and Docker won't know
-  echo "Startup successful."
-  break
-
-done
-
-while true; do
-
-  # Check if NFS is STILL running by recording it's PID (if it's not running $pid will be null):
-  pid=`pidof rpc.mountd`
-  # If it is not, lets kill our PID1 process (this script) by breaking out of this while loop:
-  # This ensures Docker observes the failure and handles it as necessary
-  if [ -z "$pid" ]; then
-    echo "NFS has failed, exiting, so Docker can restart the container..."
-    break
-  fi
-
-  # If it is, give the CPU a rest
-  sleep 1
-
-done
-
-sleep 1
-exit 1

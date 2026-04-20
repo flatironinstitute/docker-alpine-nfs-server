@@ -1,5 +1,5 @@
 FROM alpine:3.23.4
-ENV container docker
+ENV container=docker
 LABEL maintainer="Amin Vakil <info@aminvakil.com>"
 
 #hadolint ignore=DL3018
@@ -8,7 +8,6 @@ RUN apk add --no-cache nfs-utils bash && \
     echo "rpc_pipefs    /var/lib/nfs/rpc_pipefs rpc_pipefs      defaults        0       0" >> /etc/fstab && \
     echo "nfsd  /proc/fs/nfsd   nfsd    defaults        0       0" >> /etc/fstab
 
-COPY exports /etc/
 COPY nfsd.sh /usr/bin/nfsd.sh
 COPY exports.sh /usr/bin/exports.sh
 
